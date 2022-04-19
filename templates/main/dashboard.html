@@ -1,0 +1,295 @@
+{% extends '_layout.html' %}
+{% load leaflet_tags %}
+{% load static %}
+
+{% block main %}
+
+<div class="map" id="map" style="width:100%; height:100%;">
+    {% leaflet_map "yourmap" callback="window.map_init_basic" %}
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // get the current users location
+    navigator.geolocation.getCurrentPosition(function(position) {
+        console.log(position)
+    });
+
+    currPos = {
+        "lat": 52.322189,
+        "lon": 4.942187
+    }
+    smallBoxLat = 0.0018 //200m
+    smallBoxLon = 0.0018
+    bigBoxLat = 1.80439 //200km
+    bigBoxLon = 1.78693
+
+    smallBoxPoints = {
+        "lamin": currPos.lat - smallBoxLat,
+        "lamax": currPos.lat + smallBoxLat,
+        "lomin": currPos.lon - smallBoxLon,
+        "lomax": currPos.lon + smallBoxLon
+    }
+
+    bigBoxPoints = {
+        "lamin": currPos.lat - bigBoxLat,
+        "lamax": currPos.lat + bigBoxLat,
+        "lomin": currPos.lon - bigBoxLon,
+        "lomax": currPos.lon + bigBoxLon
+    }
+
+    let map_bounds = {
+        "lamin": 51.5078877,
+        "lomin": 3.960571,
+        "lamax": 52.6688875,
+        "lomax": 6.2443542,
+    }
+
+    // async function
+    async function fetchplane_data (map_bounds) {
+        // await response of fetch call
+        let response = await fetch("https://opensky-network.org/api/states/all?lamin=" + map_bounds.lamin + "&lomin=" + map_bounds.lomin + "&lamax=" + map_bounds.lamax + "&lomax=" + map_bounds.lomax);
+        // only proceed once promise is resolved
+        let data = await response.json();
+        // only proceed once second promise is resolved
+        return data;
+    }
+  
+  
+
+    // define red icon
+
+    // define a green plane
+    basicPlaneIcon = L.icon({
+        iconUrl: "{% static 'basic_plane.svg' %}",
+        iconSize: [45, 45],        
+    });
+
+
+    // define a dict of the markers
+    let markers = {}
+
+    // define a dict of the lines
+    let lines = {}
+
+    // time array
+    let times = []
+
+    let highest_curr_time = 0
+
+    let higher = false
+    let payload = {}
+    let planes = {}
+
+    async function setMarkers(plane_data, markers, map) {
+        // 5th and 6th index is longitude and latitude of plane
+        // 8th index is bool if on ground
+        for (let i = 0; i < Object.keys(plane_data).length; i++) {
+            true_track = plane_data[i][10]
+
+            if (true_track == null) {
+                true_track = 0
+            }
+
+            icao = String(plane_data[i][0] ? plane_data[i][0] : "no icao")
+            time_position = plane_data[i][3] ? plane_data[i][3] : 0
+            on_ground = plane_data[i][8] ? plane_data[i][8] : false
+            velocity = plane_data[i][9] ? plane_data[i][9] : 0
+            vertical_rate = plane_data[i][11] ? plane_data[i][11] : 0
+            sensors = plane_data[i][12] ? plane_data[i][12] : 0
+            geo_altitude = plane_data[i][13] ? plane_data[i][13] : 0
+            squawk = plane_data[i][14] ? plane_data[i][14] : 0
+            spi = plane_data[i][15] ? plane_data[i][15] : 0
+            position_source = plane_data[i][16] ? plane_data[i][16] : 0
+            origin_country = plane_data[i][2] ? plane_data[i][2] : 0
+            callsign = plane_data[i][1] ? plane_data[i][1] : 0
+
+            let time_positions = []
+
+            // get all the time_positions from planes[icao]
+            if (planes[icao]) {
+                time_positions = Object.keys(planes[icao])
+            }
+
+            highest_curr_time = 0
+            // calculate the max of these time positions
+            if (time_positions.length > 0) {
+                highest_curr_time = Math.max(...time_positions)
+            }
+
+            // if the current time position is higher than the max time position
+            if (time_position > highest_curr_time) {
+                if (!planes[icao] && icao != "no icao") {
+                    planes[icao] = {}
+                }
+    
+                if (!planes[icao][time_position] && icao != "no icao") {
+                    planes[icao][time_position] = {
+                        "longitude": plane_data[i][5],
+                        "latitude": plane_data[i][6],
+                        "on_ground": on_ground,
+                        "velocity": velocity,
+                        "vertical_rate": vertical_rate,
+                        "sensors": sensors,
+                        "geo_altitude": geo_altitude,
+                        "squawk": squawk,
+                        "spi": spi,
+                        "position_source": position_source,
+                        "origin_country": origin_country,
+                        "callsign": callsign,
+                        "true_track": true_track
+                    }
+                }
+
+                // DELETE THE OLD MARKER
+                // if plane_data[i][0] is in markers dict
+                if (markers[icao]) {
+                    // remove the marker from the map
+                    await map.removeLayer(markers[icao])
+                    // remove the marker from the dict
+                    await delete markers[icao]
+                }
+
+                if (on_ground == true) {
+                    // create a new marker
+                    marker = await L.marker([planes[icao][time_position]["latitude"], 
+                    planes[icao][time_position]["longitude"]], {icon: basicPlaneIcon,
+                        rotationAngle: parseInt(true_track),
+                        rotationOrigin: 'center',
+                    }).addTo(map).bindTooltip(String(callsign));
+                    // add this marker to the marker dict
+                } else {
+                    marker = await L.marker([planes[icao][time_position]["latitude"], 
+                    planes[icao][time_position]["longitude"]], {icon: basicPlaneIcon,
+                        rotationAngle: parseInt(true_track),
+                        rotationOrigin: 'center',
+                    }).addTo(map).bindTooltip(String(callsign));
+
+                }
+
+                // clicking on the marker copies its callsign to the clipboard. Each marker its own.
+                marker.on('click', function(e) {
+                    var textField = document.createElement('textarea');
+                    textField.innerText = callsign;
+                    document.body.appendChild(textField);
+                    textField.select();
+                    document.execCommand('copy');
+                    textField.remove();
+                });
+
+                markers[icao] = await marker
+            }
+        }
+
+        return new_load = {
+            "markers": markers,
+            "planes": planes
+        }
+    }
+
+    let time_per_call = 1000
+    let waiting_time = 1000
+
+    // calc waiting time
+    function calc_waiting_time(start, end, time_per_call) {
+        return time_per_call - (end - start)
+    }
+
+    function handleMapMoving (map, map_bounds) {
+        var bounds = map.getBounds();
+        return {
+            "lamin": bounds._southWest.lat,
+            "lomin": bounds._southWest.lng,
+            "lamax": bounds._northEast.lat,
+            "lomax": bounds._northEast.lng
+        }
+    }
+
+    async function updatePlanes (map, options) {
+        let start = new Date().getTime()
+        higher = false
+        // fetch the data from api
+        payload = await fetchplane_data(map_bounds)
+            .then(data => {
+                plane_data = data.states
+                new_time = data.time
+
+                let data_payload = {
+                    "plane_data": plane_data,
+                    "times": times,
+                    "new_time": new_time
+                }
+                return data_payload
+            })
+            .catch(reason => {
+                console.log(reason.message)
+                return reason
+            });
+
+        times = await payload.times
+        plane_data = await payload.plane_data
+        new_time = await payload.new_time
+
+        // if the time is higher than ever been, redraw all the plane_data
+        new_load = await setMarkers(plane_data, markers, map)
+        markers = await new_load.markers
+        planes = await new_load.planes
+
+        let end = new Date().getTime()
+        let waiting_time = await calc_waiting_time(start, end, time_per_call)
+        return waiting_time
+    }
+
+    function map_init_basic (map, options) {
+        map.on('moveend', function(e) {
+            map_bounds = handleMapMoving(map, map_bounds)
+
+            // delete all markers and planes
+            for (let i = 0; i < Object.keys(markers).length; i++) {
+                map.removeLayer(markers[Object.keys(markers)[i]])
+            }
+
+            for (let i = 0; i < Object.keys(planes).length; i++) {
+                map.removeLayer(planes[Object.keys(planes)[i]])
+            }
+
+            // also from the dicts
+            markers = {}
+            planes = {}
+
+            // run immediately update
+            updatePlanes(map, options);
+         });
+
+         updatePlanes(map, options);
+        // interval of setMarkers, but start immediately
+        setInterval(async function() {
+            waiting_time = await updatePlanes(map, options)
+        }, waiting_time);
+    }
+
+    // when doc loaded
+
+</script>
+
+
+<style>
+    #map { height: 100%; }
+    .leaflet-container {  /* all maps */
+        width:  100%;
+        height: 100%;
+    }
+
+    #specialbigmap {
+        height: 800px;
+    }
+
+    /* Resize the "display_raw" textbox */
+    .django-leaflet-raw-textarea {
+        width: 100%;
+    }
+</style>
+
+{% endblock %}

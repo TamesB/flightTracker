@@ -1,0 +1,5 @@
+<form action="{% url 'login' %}" class="login_form" method="post" encoding='multipart/form-data'>
+    {% csrf_token %}
+    {{ form }}
+    <input type="submit" value="Submit">
+</form>
